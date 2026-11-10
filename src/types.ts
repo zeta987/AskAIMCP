@@ -5,11 +5,20 @@ export type AIProvider =
   | "perplexity"
   | "openai-compatible";
 
+export interface ModelEntry {
+  /** Name exposed to the calling agent (defaults to the model ID) */
+  name: string;
+  /** Model ID sent to the provider */
+  id: string;
+}
+
 export interface AskAIConfig {
   /** The AI provider to use */
   provider: AIProvider;
-  /** The model to use for AI queries */
+  /** The default model ID (first entry of `models`) */
   model: string;
+  /** All models the calling agent may choose from; the first is the default */
+  models?: ModelEntry[];
   /** API key for the AI provider*/
   apiKey?: string;
   temperature?: number;
@@ -26,11 +35,15 @@ export interface AskAIRequest {
   question: string;
   /** Optional context including background information, code snippets, etc. */
   context?: string;
+  /** Model name (as exposed to the agent) or model ID; defaults to the first configured model */
+  model?: string;
 }
 
 export interface AskAIResponse {
   response: string;
   provider: AIProvider;
+  /** Model name as exposed to the agent */
+  name?: string;
   /** Actual model ID from response */
   model?: string;
 }

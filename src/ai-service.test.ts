@@ -1,10 +1,34 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { streamText } from "ai";
 import { AIService } from "./ai-service.js";
 import type { AskAIConfig } from "./types.js";
 
 vi.mock("ai", () => ({
-  generateText: vi.fn(),
+  streamText: vi.fn(),
 }));
+
+type Part = Record<string, unknown>;
+
+/** Build a fake streamText result that yields the given stream parts. */
+function fakeStream(parts: Part[], modelId = "served-model") {
+  return {
+    fullStream: (async function* () {
+      for (const part of parts) yield part;
+    })(),
+    response: Promise.resolve({ modelId }),
+    finishReason: Promise.resolve("stop"),
+  };
+}
+
+const multiConfig: AskAIConfig = {
+  provider: "openai-compatible",
+  model: "gpt-x",
+  baseUrl: "https://api.example.com/v1",
+  models: [
+    { name: "gpt-x", id: "gpt-x" },
+    { name: "gemini", id: "gemini-3-pro" },
+  ],
+};
 
 vi.mock("@ai-sdk/openai", () => ({
   createOpenAI: vi.fn(() => vi.fn(() => "mocked-openai-model")),
@@ -152,6 +176,79 @@ describe("AIService", () => {
       };
 
       expect(() => new AIService(config)).not.toThrow();
+    });
+  });
+
+  describe("askAI streaming", () => {
+    it("concatenates streamed text and reports progress", async () => {
+      vi.mocked(streamText).mockReturnValue(
+        fakeStream([
+          { type: "reasoning", textDelta: "think" },
+          { type: "text-delta", textDelta: "Hello " },
+          { type: "text-delta", textDelta: "world" },
+          { type: "finish" },
+        ]) as never
+      );
+      const onProgress = vi.fn();
+      const service = new AIService(multiConfig);
+
+      const result = await service.askAI({ question: "hi" }, { onProgress });
+
+      expect(result.response).toBe("Hello world");
+      expect(result.name).toBe("gpt-x");
+      expect(result.model).toBe("served-model");
+      expect(onProgress).toHaveBeenCalledTimes(3);
+      expect(onProgress).toHaveBeenLastCalledWith({
+        textChars: 11,
+        reasoningChars: 5,
+      });
+    });
+
+    it("routes the request to the selected model", async () => {
+      vi.mocked(streamText).mockReturnValue(
+        fakeStream([{ type: "text-delta", textDelta: "ok" }]) as never
+      );
+      const service = new AIService(multiConfig);
+
+      const result = await service.askAI({ question: "hi", model: "gemini" });
+
+      expect(result.name).toBe("gemini");
+      const { createOpenAI } = await import("@ai-sdk/openai");
+      const factory = vi.mocked(createOpenAI).mock.results[0]?.value;
+      expect(factory).toHaveBeenCalledWith("gemini-3-pro");
+    });
+
+    it("rejects an unknown model", async () => {
+      const service = new AIService(multiConfig);
+
+      await expect(
+        service.askAI({ question: "hi", model: "nope" })
+      ).rejects.toThrow('Unknown model "nope". Available models: gpt-x, gemini');
+    });
+
+    it("throws on an error stream part", async () => {
+      vi.mocked(streamText).mockReturnValue(
+        fakeStream([
+          { type: "text-delta", textDelta: "partial" },
+          { type: "error", error: new Error("401 Unauthorized") },
+        ]) as never
+      );
+      const service = new AIService(multiConfig);
+
+      await expect(service.askAI({ question: "hi" })).rejects.toThrow(
+        "AI service error: 401 Unauthorized"
+      );
+    });
+
+    it("throws on an empty response", async () => {
+      vi.mocked(streamText).mockReturnValue(
+        fakeStream([{ type: "finish" }]) as never
+      );
+      const service = new AIService(multiConfig);
+
+      await expect(service.askAI({ question: "hi" })).rejects.toThrow(
+        "Model returned an empty response (finish reason: stop)"
+      );
     });
   });
 });

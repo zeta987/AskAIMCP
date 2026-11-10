@@ -1,11 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { getConfig } from "./config.js";
+import { getConfig, parseModels } from "./config.js";
 
 describe("Config", () => {
   const originalEnv = process.env;
 
   beforeEach(() => {
     process.env = { ...originalEnv };
+    delete process.env.MODELS;
   });
 
   afterEach(() => {
@@ -25,13 +26,30 @@ describe("Config", () => {
     it("should throw error when MODEL is missing", () => {
       process.env.PROVIDER = "openai";
       delete process.env.MODEL;
+      delete process.env.MODELS;
 
       expect(() => getConfig()).toThrow(
-        "MODEL environment variable is required"
+        "MODELS (or MODEL) environment variable is required"
       );
     });
 
+    it("should read a model list from MODELS", () => {
+      process.env.PROVIDER = "openai-compatible";
+      process.env.MODELS = "gpt-x, gemini=gemini-3-pro\nclaude=claude-y";
+      process.env.MODEL = "ignored";
+
+      const config = getConfig();
+
+      expect(config.model).toBe("gpt-x");
+      expect(config.models).toEqual([
+        { name: "gpt-x", id: "gpt-x" },
+        { name: "gemini", id: "gemini-3-pro" },
+        { name: "claude", id: "claude-y" },
+      ]);
+    });
+
     it("should return basic config with required fields", () => {
+      delete process.env.MODELS;
       process.env.PROVIDER = "openai";
       process.env.MODEL = "o3-2025-04-16";
 
@@ -90,6 +108,23 @@ describe("Config", () => {
         const config = getConfig();
         expect(config.provider).toBe(provider);
       });
+    });
+  });
+
+  describe("parseModels", () => {
+    it("rejects duplicate names", () => {
+      expect(() => parseModels("a=x,a=y")).toThrow('Duplicate model name: "a"');
+    });
+
+    it("rejects an entry with an empty id", () => {
+      expect(() => parseModels("a=")).toThrow('Invalid model entry: "a="');
+    });
+
+    it("ignores empty entries", () => {
+      expect(parseModels(" a ,, b ,")).toEqual([
+        { name: "a", id: "a" },
+        { name: "b", id: "b" },
+      ]);
     });
   });
 });
